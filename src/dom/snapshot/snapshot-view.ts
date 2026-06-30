@@ -50,10 +50,6 @@ class SnapshotView extends DOMView<SnapshotViewState, SnapshotViewData> {
 
 	protected _readingMode!: ReadingMode;
 
-	private _searchContext: SearchContext = { text: '', charDataRanges: [] };
-
-	private _viewCreated = false;
-
 	protected async _getSrcDoc() {
 		if (this._options.data.srcDoc) {
 			return this._options.data.srcDoc;
@@ -184,8 +180,9 @@ class SnapshotView extends DOMView<SnapshotViewState, SnapshotViewData> {
 		}
 
 		this._initOutline();
-		this._viewCreated = true;
-		this._refreshSearchContext();
+		if (this._findState?.active) {
+			await this.setFindState({ ...this._findState });
+		}
 
 		try {
 			// Update old sortIndexes (determined based on length)
@@ -210,30 +207,23 @@ class SnapshotView extends DOMView<SnapshotViewState, SnapshotViewData> {
 		}
 	}
 
-	private _refreshSearchContext() {
-		this._searchContext = this._buildSearchContext();
-		if (this._find) {
-			this._find.cancel();
-			this._find = null;
-			this._handleViewUpdate();
-		}
-		if (this._viewCreated && this._findState?.active) {
-			void this.setFindState({ ...this._findState });
-		}
+	private _buildFindInPageContext() {
+		return createSearchContext(getVisibleTextNodes(this._iframeDocument.body));
 	}
 
-	private _buildSearchContext() {
-		if (this._isSemanticSnapshotDocument()) {
-			let blocks = new Set(this._getSnapshotSearchBlocks());
-			if (!blocks.size) {
-				return { text: '', charDataRanges: [] };
-			}
-			return createSearchContext(getAllTextNodes(this._iframeDocument.body).filter((node) => {
-				let elem = closestElement(node);
-				return !!elem && blocks.has(this._snapshotCondensedBlock(elem));
-			}));
+	private _buildAnnotationGatedSemanticSearchContext(): SearchContext {
+		if (!this._isSemanticSnapshotDocument()) {
+			return createSearchContext(getVisibleTextNodes(this._iframeDocument.body));
 		}
-		return createSearchContext(getVisibleTextNodes(this._iframeDocument.body));
+
+		let blocks = new Set(this._getSnapshotSearchBlocks());
+		if (!blocks.size) {
+			return { text: '', charDataRanges: [] };
+		}
+		return createSearchContext(getAllTextNodes(this._iframeDocument.body).filter((node) => {
+			let elem = closestElement(node);
+			return !!elem && blocks.has(this._snapshotCondensedBlock(elem));
+		}));
 	}
 
 	private _isSemanticSnapshotDocument() {
@@ -774,7 +764,7 @@ class SnapshotView extends DOMView<SnapshotViewState, SnapshotViewData> {
 					},
 				});
 				await this._find.run(
-					this._searchContext,
+					this._buildFindInPageContext(),
 					this._lastSelectionRange ?? undefined
 				);
 				this.findNext();
@@ -890,7 +880,6 @@ class SnapshotView extends DOMView<SnapshotViewState, SnapshotViewData> {
 
 	override setAnnotations(annotations: WADMAnnotation[]) {
 		super.setAnnotations(annotations);
-		this._refreshSearchContext();
 	}
 
 	async print() {
