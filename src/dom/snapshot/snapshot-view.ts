@@ -28,10 +28,11 @@ import DOMView, {
 import { getUniqueSelectorContaining } from "../common/lib/unique-selector";
 import {
 	closestElement,
+	getAllTextNodes,
 	getVisibleTextNodes,
 	iterateWalker
 } from "../common/lib/nodes";
-import DefaultFindProcessor, { createSearchContext } from "../common/lib/find";
+import DefaultFindProcessor, { createSearchContext, type SearchContext } from "../common/lib/find";
 import injectCSS from './stylesheets/inject.scss';
 import darkReaderJS from '!!raw-loader!darkreader/darkreader';
 import { DynamicThemeFix } from "darkreader";
@@ -49,11 +50,9 @@ class SnapshotView extends DOMView<SnapshotViewState, SnapshotViewData> {
 
 	protected _readingMode!: ReadingMode;
 
-	private get _searchContext() {
-		let searchContext = createSearchContext(getVisibleTextNodes(this._iframeDocument.body));
-		Object.defineProperty(this, '_searchContext', { value: searchContext });
-		return searchContext;
-	}
+	private _searchContext: SearchContext = { text: '', charDataRanges: [] };
+
+	private _viewCreated = false;
 
 	protected async _getSrcDoc() {
 		if (this._options.data.srcDoc) {
@@ -185,6 +184,8 @@ class SnapshotView extends DOMView<SnapshotViewState, SnapshotViewData> {
 		}
 
 		this._initOutline();
+		this._viewCreated = true;
+		this._refreshSearchContext();
 
 		try {
 			// Update old sortIndexes (determined based on length)
@@ -206,6 +207,174 @@ class SnapshotView extends DOMView<SnapshotViewState, SnapshotViewData> {
 		}
 		catch (e) {
 			console.warn('Failed to update sortIndexes', e);
+		}
+	}
+
+	private _refreshSearchContext() {
+		this._searchContext = this._buildSearchContext();
+		if (this._find) {
+			this._find.cancel();
+			this._find = null;
+			this._handleViewUpdate();
+		}
+		if (this._viewCreated && this._findState?.active) {
+			void this.setFindState({ ...this._findState });
+		}
+	}
+
+	private _buildSearchContext() {
+		if (this._isSemanticSnapshotDocument()) {
+			let blocks = new Set(this._getSnapshotSearchBlocks());
+			if (!blocks.size) {
+				return { text: '', charDataRanges: [] };
+			}
+			return createSearchContext(getAllTextNodes(this._iframeDocument.body).filter((node) => {
+				let elem = closestElement(node);
+				return !!elem && blocks.has(this._snapshotCondensedBlock(elem));
+			}));
+		}
+		return createSearchContext(getVisibleTextNodes(this._iframeDocument.body));
+	}
+
+	private _isSemanticSnapshotDocument() {
+		let body = this._iframeDocument?.body;
+		return !!body
+			&& (
+				body.classList.contains('juris-lit-semantic-snapshot')
+				|| body.classList.contains('westlaw-snapshot')
+			);
+	}
+
+	private _getSnapshotSearchBlocks() {
+		let annotatedBlocks = this._getSnapshotAnnotatedBlocks();
+		if (!annotatedBlocks.size) {
+			return [];
+		}
+		let blocks = this._getSnapshotCondensedBlocks();
+		let keptBlocks = new Set(annotatedBlocks);
+		this._addSnapshotIndentAncestorBlocks(annotatedBlocks, keptBlocks, blocks);
+		let includedOpinions = new Set(
+			Array.from(annotatedBlocks)
+				.map(block => block.closest?.('.opinion'))
+				.filter(Boolean)
+		);
+		for (let head of this._iframeDocument.querySelectorAll('[data-juris-lit-condensed-head]')) {
+			let kind = head.getAttribute('data-juris-lit-condensed-head');
+			let opinion = head.closest('.opinion');
+			if (kind === 'opinion-author' && opinion && !includedOpinions.has(opinion)) {
+				continue;
+			}
+			keptBlocks.add(this._snapshotCondensedBlock(head));
+		}
+		return blocks.filter(block => keptBlocks.has(block));
+	}
+
+	private _getSnapshotAnnotatedBlocks() {
+		let blocks = new Set<Element>();
+		for (let annotation of this._annotations) {
+			let position = annotation.position;
+			if (!position || position.type !== 'CssSelector' || !position.value) {
+				continue;
+			}
+			let target = this._getSnapshotElementForSelector(position.value);
+			if (target) {
+				blocks.add(this._snapshotCondensedBlock(target));
+			}
+		}
+
+		for (let block of Array.from(blocks)) {
+			if (!block || block.closest?.('.documentHeader')) {
+				blocks.delete(block);
+			}
+		}
+		return blocks;
+	}
+
+	private _snapshotCondensedBlock(node: Element) {
+		return node.closest?.('p, blockquote, li, h1, h2, h3, h4, h5, h6, .footnote')
+			|| node.closest?.('.document > *, .opinion > *')
+			|| node;
+	}
+
+	private _getSnapshotCondensedBlocks() {
+		return Array.from(this._iframeDocument.querySelectorAll(
+			'body:is(.juris-lit-semantic-snapshot, .westlaw-snapshot) > .document h1, '
+			+ 'body:is(.juris-lit-semantic-snapshot, .westlaw-snapshot) > .document h2, '
+			+ 'body:is(.juris-lit-semantic-snapshot, .westlaw-snapshot) > .document h3, '
+			+ 'body:is(.juris-lit-semantic-snapshot, .westlaw-snapshot) > .document h4, '
+			+ 'body:is(.juris-lit-semantic-snapshot, .westlaw-snapshot) > .document h5, '
+			+ 'body:is(.juris-lit-semantic-snapshot, .westlaw-snapshot) > .document h6, '
+			+ 'body:is(.juris-lit-semantic-snapshot, .westlaw-snapshot) > .document p, '
+			+ 'body:is(.juris-lit-semantic-snapshot, .westlaw-snapshot) > .document blockquote, '
+			+ 'body:is(.juris-lit-semantic-snapshot, .westlaw-snapshot) > .document li, '
+			+ 'body:is(.juris-lit-semantic-snapshot, .westlaw-snapshot) > .document .footnote'
+		)).filter(block => !block.closest('.documentHeader, .juris-lit-snapshot-omission'));
+	}
+
+	private _addSnapshotIndentAncestorBlocks(annotatedBlocks: Set<Element>, keptBlocks: Set<Element>, blocks: Element[]) {
+		let blockIndexes = new Map(blocks.map((block, index) => [block, index]));
+		for (let block of annotatedBlocks) {
+			let index = blockIndexes.get(block);
+			if (index === undefined || !this._snapshotBlockCanHaveIndentAncestors(block)) {
+				continue;
+			}
+			let scope = this._snapshotIndentScope(block);
+			let currentIndent = this._snapshotBlockIndent(block);
+			for (let i = index - 1; i >= 0 && currentIndent > 0; i--) {
+				let candidate = blocks[i];
+				if (this._snapshotIndentScope(candidate) !== scope) {
+					break;
+				}
+				if (!this._snapshotBlockCanHaveIndentAncestors(candidate)) {
+					continue;
+				}
+				let indent = this._snapshotBlockIndent(candidate);
+				if (indent < currentIndent - 4) {
+					keptBlocks.add(candidate);
+					currentIndent = indent;
+				}
+			}
+		}
+	}
+
+	private _snapshotBlockCanHaveIndentAncestors(block: Element) {
+		return /^(P|LI|BLOCKQUOTE)$/.test(block.tagName);
+	}
+
+	private _snapshotIndentScope(block: Element) {
+		return block.closest?.('.opinion') || block.closest?.('.document') || block.parentElement;
+	}
+
+	private _snapshotBlockIndent(block: Element) {
+		let win = block.ownerDocument?.defaultView;
+		let style = win?.getComputedStyle(block);
+		let listDepth = 0;
+		for (let parent = block.parentElement; parent; parent = parent.parentElement) {
+			if (parent.tagName === 'UL' || parent.tagName === 'OL') {
+				listDepth++;
+			}
+		}
+		return listDepth * 24
+			+ this._snapshotCSSLength(style?.marginLeft)
+			+ this._snapshotCSSLength(style?.paddingLeft)
+			+ Math.max(0, this._snapshotCSSLength(style?.textIndent));
+	}
+
+	private _snapshotCSSLength(value: string | undefined) {
+		let length = parseFloat(value || '');
+		return Number.isFinite(length) ? length : 0;
+	}
+
+	private _getSnapshotElementForSelector(selector: string) {
+		let idMatch = selector.match(/^#([A-Za-z][A-Za-z0-9_-]*)$/);
+		if (idMatch) {
+			return this._iframeDocument.getElementById(idMatch[1]);
+		}
+		try {
+			return this._iframeDocument.querySelector(selector);
+		}
+		catch (e) {
+			return null;
 		}
 	}
 
@@ -717,6 +886,11 @@ class SnapshotView extends DOMView<SnapshotViewState, SnapshotViewData> {
 		if (!options.skipHistory) {
 			this._pushHistoryPoint();
 		}
+	}
+
+	override setAnnotations(annotations: WADMAnnotation[]) {
+		super.setAnnotations(annotations);
+		this._refreshSearchContext();
 	}
 
 	async print() {
