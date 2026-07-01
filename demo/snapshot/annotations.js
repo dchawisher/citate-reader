@@ -7,7 +7,7 @@ export default [
 			type: "CssSelector",
 			value: "#the_zotero_pdf_reader_and_note_editor"
 		},
-		text: "The Zotero PDF Reader and Note Editor",
+		text: "The Citate PDF Reader and Note Editor",
 		pageLabel: "",
 		comment: "interesting!",
 		tags: [],
@@ -110,7 +110,7 @@ export default [
 				end: 91
 			}
 		},
-		text: "Note that annotations created in the built-in PDF reader are stored in the Zotero database",
+		text: "Note that annotations created in the built-in PDF reader are stored in the Citate database",
 		pageLabel: "",
 		comment: "good to know",
 		tags: [],

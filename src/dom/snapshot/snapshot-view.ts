@@ -230,7 +230,7 @@ class SnapshotView extends DOMView<SnapshotViewState, SnapshotViewData> {
 		let body = this._iframeDocument?.body;
 		return !!body
 			&& (
-				body.classList.contains('juris-lit-semantic-snapshot')
+				body.classList.contains('citate-semantic-snapshot')
 				|| body.classList.contains('westlaw-snapshot')
 			);
 	}
@@ -248,8 +248,8 @@ class SnapshotView extends DOMView<SnapshotViewState, SnapshotViewData> {
 				.map(block => block.closest?.('.opinion'))
 				.filter(Boolean)
 		);
-		for (let head of this._iframeDocument.querySelectorAll('[data-juris-lit-condensed-head]')) {
-			let kind = head.getAttribute('data-juris-lit-condensed-head');
+		for (let head of this._iframeDocument.querySelectorAll('[data-citate-condensed-head]')) {
+			let kind = head.getAttribute('data-citate-condensed-head');
 			let opinion = head.closest('.opinion');
 			if (kind === 'opinion-author' && opinion && !includedOpinions.has(opinion)) {
 				continue;
@@ -288,17 +288,17 @@ class SnapshotView extends DOMView<SnapshotViewState, SnapshotViewData> {
 
 	private _getSnapshotCondensedBlocks() {
 		return Array.from(this._iframeDocument.querySelectorAll(
-			'body:is(.juris-lit-semantic-snapshot, .westlaw-snapshot) > .document h1, '
-			+ 'body:is(.juris-lit-semantic-snapshot, .westlaw-snapshot) > .document h2, '
-			+ 'body:is(.juris-lit-semantic-snapshot, .westlaw-snapshot) > .document h3, '
-			+ 'body:is(.juris-lit-semantic-snapshot, .westlaw-snapshot) > .document h4, '
-			+ 'body:is(.juris-lit-semantic-snapshot, .westlaw-snapshot) > .document h5, '
-			+ 'body:is(.juris-lit-semantic-snapshot, .westlaw-snapshot) > .document h6, '
-			+ 'body:is(.juris-lit-semantic-snapshot, .westlaw-snapshot) > .document p, '
-			+ 'body:is(.juris-lit-semantic-snapshot, .westlaw-snapshot) > .document blockquote, '
-			+ 'body:is(.juris-lit-semantic-snapshot, .westlaw-snapshot) > .document li, '
-			+ 'body:is(.juris-lit-semantic-snapshot, .westlaw-snapshot) > .document .footnote'
-		)).filter(block => !block.closest('.documentHeader, .juris-lit-snapshot-omission'));
+			'body:is(.citate-semantic-snapshot, .westlaw-snapshot) > .document h1, '
+			+ 'body:is(.citate-semantic-snapshot, .westlaw-snapshot) > .document h2, '
+			+ 'body:is(.citate-semantic-snapshot, .westlaw-snapshot) > .document h3, '
+			+ 'body:is(.citate-semantic-snapshot, .westlaw-snapshot) > .document h4, '
+			+ 'body:is(.citate-semantic-snapshot, .westlaw-snapshot) > .document h5, '
+			+ 'body:is(.citate-semantic-snapshot, .westlaw-snapshot) > .document h6, '
+			+ 'body:is(.citate-semantic-snapshot, .westlaw-snapshot) > .document p, '
+			+ 'body:is(.citate-semantic-snapshot, .westlaw-snapshot) > .document blockquote, '
+			+ 'body:is(.citate-semantic-snapshot, .westlaw-snapshot) > .document li, '
+			+ 'body:is(.citate-semantic-snapshot, .westlaw-snapshot) > .document .footnote'
+		)).filter(block => !block.closest('.documentHeader, .citate-snapshot-omission'));
 	}
 
 	private _addSnapshotIndentAncestorBlocks(annotatedBlocks: Set<Element>, keptBlocks: Set<Element>, blocks: Element[]) {

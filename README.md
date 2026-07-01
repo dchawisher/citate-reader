@@ -1,11 +1,11 @@
-# Zotero PDF/EPUB/HTML reader and annotator
+# Citate PDF/EPUB/HTML reader and annotator
 
 ## Build
 
 Clone the repository:
 
 ```
-git clone https://github.com/zotero/reader --recursive
+git clone https://github.com/dchawisher/citate-reader --recursive
 ```
 
 With Node 18+, run the following:
