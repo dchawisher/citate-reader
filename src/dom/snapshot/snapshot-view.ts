@@ -188,15 +188,23 @@ class SnapshotView extends DOMView<SnapshotViewState, SnapshotViewData> {
 			// Update old sortIndexes (determined based on length)
 			// We used to count characters from <html>, which was volatile and led
 			// to unnecessarily large sortIndexes. Now we count from <body>.
+			// Also repair Citate-imported Westlaw annotations, whose translator-era
+			// sortIndexes were creation-order counters rather than document positions.
 			if (!this._options.readOnly) {
 				this._options.onUpdateAnnotations(this._annotations
-					.filter(a => !a.readOnly && a.sortIndex && a.sortIndex.length === SORT_INDEX_LENGTH_OLD)
+					.filter(a => !a.readOnly && a.sortIndex
+						&& (a.sortIndex.length === SORT_INDEX_LENGTH_OLD
+							|| this._isCitateImportedAnnotationPosition(a.position)))
 					.map((a) => {
 						let range = this.toDisplayedRange(a.position);
 						if (!range) {
 							return null;
 						}
-						return { id: a.id, sortIndex: this._getSortIndex(range) };
+						let sortIndex = this._getSortIndex(range);
+						if (sortIndex === a.sortIndex) {
+							return null;
+						}
+						return { id: a.id, sortIndex };
 					})
 					.filter(Boolean) as Partial<WADMAnnotation>[]
 				);
@@ -205,6 +213,10 @@ class SnapshotView extends DOMView<SnapshotViewState, SnapshotViewData> {
 		catch (e) {
 			console.warn('Failed to update sortIndexes', e);
 		}
+	}
+
+	private _isCitateImportedAnnotationPosition(position: Selector) {
+		return position.type === 'CssSelector' && /^#wl-annotation-\d+$/.test(position.value);
 	}
 
 	private _buildFindInPageContext() {
@@ -231,6 +243,7 @@ class SnapshotView extends DOMView<SnapshotViewState, SnapshotViewData> {
 		return !!body
 			&& (
 				body.classList.contains('citate-semantic-snapshot')
+				|| body.classList.contains('juris-lit-semantic-snapshot')
 				|| body.classList.contains('westlaw-snapshot')
 			);
 	}
@@ -243,15 +256,21 @@ class SnapshotView extends DOMView<SnapshotViewState, SnapshotViewData> {
 		let blocks = this._getSnapshotCondensedBlocks();
 		let keptBlocks = new Set(annotatedBlocks);
 		this._addSnapshotIndentAncestorBlocks(annotatedBlocks, keptBlocks, blocks);
+		for (let block of blocks) {
+			if (block.closest?.('[data-citate-never-collapse], [data-juris-lit-never-collapse]')) {
+				keptBlocks.add(block);
+			}
+		}
 		let includedOpinions = new Set(
 			Array.from(annotatedBlocks)
-				.map(block => block.closest?.('.opinion'))
+				.map(block => block.closest?.('.opinion, .subdocument'))
 				.filter(Boolean)
 		);
-		for (let head of this._iframeDocument.querySelectorAll('[data-citate-condensed-head]')) {
-			let kind = head.getAttribute('data-citate-condensed-head');
-			let opinion = head.closest('.opinion');
-			if (kind === 'opinion-author' && opinion && !includedOpinions.has(opinion)) {
+		for (let head of this._iframeDocument.querySelectorAll('[data-citate-condensed-head], [data-juris-lit-condensed-head]')) {
+			let kind = head.getAttribute('data-citate-condensed-head')
+				|| head.getAttribute('data-juris-lit-condensed-head');
+			let opinion = head.closest('.opinion, .subdocument');
+			if (kind && ['opinion-author', 'subdocument-byline'].includes(kind) && opinion && !includedOpinions.has(opinion)) {
 				continue;
 			}
 			keptBlocks.add(this._snapshotCondensedBlock(head));
@@ -282,22 +301,16 @@ class SnapshotView extends DOMView<SnapshotViewState, SnapshotViewData> {
 
 	private _snapshotCondensedBlock(node: Element) {
 		return node.closest?.('p, blockquote, li, h1, h2, h3, h4, h5, h6, .footnote')
-			|| node.closest?.('.document > *, .opinion > *')
+			|| node.closest?.('.document > *, .opinion > *, .subdocument > *')
 			|| node;
 	}
 
 	private _getSnapshotCondensedBlocks() {
+		const semanticBody = 'body:is(.citate-semantic-snapshot, .juris-lit-semantic-snapshot, .westlaw-snapshot)';
 		return Array.from(this._iframeDocument.querySelectorAll(
-			'body:is(.citate-semantic-snapshot, .westlaw-snapshot) > .document h1, '
-			+ 'body:is(.citate-semantic-snapshot, .westlaw-snapshot) > .document h2, '
-			+ 'body:is(.citate-semantic-snapshot, .westlaw-snapshot) > .document h3, '
-			+ 'body:is(.citate-semantic-snapshot, .westlaw-snapshot) > .document h4, '
-			+ 'body:is(.citate-semantic-snapshot, .westlaw-snapshot) > .document h5, '
-			+ 'body:is(.citate-semantic-snapshot, .westlaw-snapshot) > .document h6, '
-			+ 'body:is(.citate-semantic-snapshot, .westlaw-snapshot) > .document p, '
-			+ 'body:is(.citate-semantic-snapshot, .westlaw-snapshot) > .document blockquote, '
-			+ 'body:is(.citate-semantic-snapshot, .westlaw-snapshot) > .document li, '
-			+ 'body:is(.citate-semantic-snapshot, .westlaw-snapshot) > .document .footnote'
+			['h1', 'h2', 'h3', 'h4', 'h5', 'h6', 'p', 'blockquote', 'li', '.footnote']
+				.map(selector => `${semanticBody} > .document ${selector}`)
+				.join(', ')
 		)).filter(block => !block.closest('.documentHeader, .citate-snapshot-omission'));
 	}
 
@@ -332,12 +345,13 @@ class SnapshotView extends DOMView<SnapshotViewState, SnapshotViewData> {
 	}
 
 	private _snapshotIndentScope(block: Element) {
-		return block.closest?.('.opinion') || block.closest?.('.document') || block.parentElement;
+		return block.closest?.('.opinion, .subdocument') || block.closest?.('.document') || block.parentElement;
 	}
 
 	private _snapshotBlockIndent(block: Element) {
 		let win = block.ownerDocument?.defaultView;
 		let style = win?.getComputedStyle(block);
+		let semanticPadding = this._snapshotSemanticNestingIndent(block);
 		let listDepth = 0;
 		for (let parent = block.parentElement; parent; parent = parent.parentElement) {
 			if (parent.tagName === 'UL' || parent.tagName === 'OL') {
@@ -346,8 +360,27 @@ class SnapshotView extends DOMView<SnapshotViewState, SnapshotViewData> {
 		}
 		return listDepth * 24
 			+ this._snapshotCSSLength(style?.marginLeft)
-			+ this._snapshotCSSLength(style?.paddingLeft)
+			+ (semanticPadding || this._snapshotCSSLength(style?.paddingLeft))
 			+ Math.max(0, this._snapshotCSSLength(style?.textIndent));
+	}
+
+	private _snapshotSemanticNestingIndent(block: Element) {
+		let level = parseInt(
+			block.getAttribute?.('data-citate-nesting-level')
+				|| block.getAttribute?.('data-juris-lit-nesting-level')
+				|| '',
+			10
+		);
+		if (!Number.isFinite(level) || level <= 0) {
+			for (let className of block.classList || []) {
+				let match = /^nestingLevel-(\d+)$/.exec(className);
+				if (match) {
+					level = parseInt(match[1], 10);
+					break;
+				}
+			}
+		}
+		return Number.isFinite(level) && level > 0 ? level * 20 : 0;
 	}
 
 	private _snapshotCSSLength(value: string | undefined) {
@@ -880,6 +913,20 @@ class SnapshotView extends DOMView<SnapshotViewState, SnapshotViewData> {
 
 	override setAnnotations(annotations: WADMAnnotation[]) {
 		super.setAnnotations(annotations);
+		if (this._isSemanticSnapshotDocument()) {
+			this._refreshSemanticSnapshotAnnotationOverlay();
+		}
+	}
+
+	private _refreshSemanticSnapshotAnnotationOverlay() {
+		this._iframeWindow.requestAnimationFrame(() => {
+			this._iframeWindow.requestAnimationFrame(() => {
+				if (!this.initialized || !this._isSemanticSnapshotDocument()) {
+					return;
+				}
+				this._handleViewUpdate(true);
+			});
+		});
 	}
 
 	async print() {
